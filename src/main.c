@@ -1,13 +1,20 @@
 #include <stdio.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-
+#include <math.h> 
 
 
 
 /* пересчет в секунды для типа AVFormatContext */
 double format_duration_secs  (AVFormatContext *fmt_ctx)
 {
+    if (fmt_ctx->duration == AV_NOPTS_VALUE)
+        return -1.0;
+
+    // from dump.c -> av_dump_format ()
+    // ???
+    //int64_t duration = fmt_ctx->duration + (fmt_ctx->duration <= INT64_MAX - 5000 ? 5000 : 0);
+    
     return (double) fmt_ctx->duration / AV_TIME_BASE;
 }
 
@@ -15,28 +22,29 @@ double format_duration_secs  (AVFormatContext *fmt_ctx)
 /* пересчет в секунды для типа AVStream */
 double stream_duration_secs (AVStream *stream)
 {
+    if (stream->duration == AV_NOPTS_VALUE)
+        return -1.0;
     return (double) stream->duration * av_q2d(stream->time_base);
 }
 
 
-/* пеерсчет секунды в часы:минуты:секунды */
+/* пеерсчет секунды в часы:минуты:секунды.доли */
 void print_duration_time (double secs) {
 
     if (secs <= 0) {
-        printf("Длительность файла не определена\n");
+        printf("длительность файла не определена\n");
         return;
     }
 
-    // ???
-    // не зная для каких целей нужно время, не понятно в какую сторону округлять
-    //secs += 0.9999999999999999; // округление вверх
+    double int_part;
+    double frac_part = modf (secs, &int_part);
     
-    int64_t isec = (int64_t) secs;
+    int64_t isec = (int64_t) int_part;
     int64_t h = isec / 3600;
     isec %= 3600;
     int64_t m = isec / 60;
     isec %= 60;
-    printf("%ld ч : %02ld мин : %02ld сек\n", h, m, isec);
+    printf("%ld ч : %02ld мин : %02.2lf сек\n", h, m, (double) isec + frac_part);
 }
 
 
@@ -67,6 +75,7 @@ int main(int argc, char *argv[]) {
     printf("Количество обнаруженных потоков: %d\n", stream_count);
 
     int64_t total_video_frames = 0;
+    int64_t video_frames = 0;
     double dur_secs = 0.0;
 
     for (int i = 0; i < stream_count; i++) {
@@ -77,25 +86,77 @@ int main(int argc, char *argv[]) {
         const char *codec_name;
         codec_name = avcodec_get_name(codecpar->codec_id);
 
-        if (codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        switch (codecpar->codec_type) { 
 
-            total_video_frames += stream->nb_frames;
-            printf ("[ПОТОК %d]: видео, кодек = %s, кол-во кадров = %ld\n", i, codec_name, stream->nb_frames);
-        } else if (codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            printf ("[ПОТОК %d]: аудио, кодек = %s\n", i, codec_name);
-        } else {
-            printf("[ПОТОК %d] - неизвестный тип потока\n", i);
+            case AVMEDIA_TYPE_VIDEO: {
+
+                dur_secs = stream_duration_secs (stream);
+
+                if (stream->nb_frames > 0) {
+                    video_frames = stream->nb_frames;
+                }
+                else if (dur_secs <= 0)
+                    video_frames = -1; // 
+
+                else if (  stream->avg_frame_rate.num && stream->avg_frame_rate.den) {
+                    double fps = av_q2d(stream->avg_frame_rate);
+                    video_frames = llround(fps * dur_secs);
+                }
+                else if (stream->r_frame_rate.num && stream->r_frame_rate.den) {
+                    double fps = av_q2d(stream->r_frame_rate);
+                    video_frames = llround(fps * dur_secs);
+                }
+                else 
+                    video_frames = -1;
+
+                printf ("[ПОТОК %d]:\n\tтип = видео, кодек = %s, кол-во кадров = ", i, codec_name);
+                if (video_frames < 0)
+                    printf ("данные не найдены\n");
+                else {
+                    total_video_frames += video_frames;
+                    printf ("%ld\n", video_frames);
+                }
+                break;
+            } 
+            case AVMEDIA_TYPE_AUDIO: {
+                printf ("[ПОТОК %d]:\n\tтип = аудио, кодек = %s\n", i, codec_name);
+                break;
+            } 
+            case  AVMEDIA_TYPE_DATA: {
+                printf("[ПОТОК %d]:\n\tтип = DATA\n", i);
+                break;
+            }
+            case AVMEDIA_TYPE_SUBTITLE: {
+                printf("[ПОТОК %d]:\n\tтип = СУБТИТРЫ\n", i);
+                break;
+            }
+            case AVMEDIA_TYPE_ATTACHMENT: {
+                printf("[ПОТОК %d]:\n\tтип = ATTACHMENT\n", i);
+                break;
+            }
+            case AVMEDIA_TYPE_NB: {
+                printf("[ПОТОК %d]:\n\tтип = NB\n", i);
+                break;
+            }
+            default: {
+                printf("[ПОТОК %d]:\n\tтип = не определен\n", i);
+                break;
+            }
         }
-        dur_secs = stream_duration_secs (stream);
-        printf ("Длительность [ПОТОК %d]: ", i);
+        printf ("\tдлительность: ");
         print_duration_time (dur_secs);
     }
 
-    printf("Суммарное количество кадров во всех видеопотоках: %ld\n", total_video_frames);
+    printf("\nСуммарное количество кадров во всех видеопотоках: %ld\n", total_video_frames);
 
     dur_secs = format_duration_secs (fmt_ctx);
     printf ("Длительность файла: ");
     print_duration_time (dur_secs);
+
+    // 
+    //printf ("INFO FROM [av_dump_format]:\n\t");
+    //for (int i = 0; i < stream_count; i++)
+    //    av_dump_format(fmt_ctx, i, filename, 0);
 
     avformat_close_input(&fmt_ctx);
 

@@ -1,6 +1,7 @@
 CC        ?= gcc
 CFLAGS    := -Wall -Wextra -Werror -std=c17 
 LDLIBS    := -lavcodec -lavformat
+LDLIBS    += -lm
 CFLAGS    += $(if $(DEBUG), -g -O0 -fsanitize=address -fno-omit-frame-pointer)
 
 DIR_SRC   := src/
