@@ -86,11 +86,11 @@ int main(int argc, char *argv[]) {
         const char *codec_name;
         codec_name = avcodec_get_name(codecpar->codec_id);
 
+        dur_secs = stream_duration_secs (stream);
+
         switch (codecpar->codec_type) { 
 
             case AVMEDIA_TYPE_VIDEO: {
-
-                dur_secs = stream_duration_secs (stream);
 
                 if (stream->nb_frames > 0) {
                     video_frames = stream->nb_frames;
